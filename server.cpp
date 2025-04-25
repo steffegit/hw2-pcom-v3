@@ -6,7 +6,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <iostream>
+#include <regex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "client.h"
 #include "include/common.h"
@@ -67,9 +69,16 @@ bool handle_stdin_command() {
 void handle_client_disconnect(
     int clientfd,
     std::unordered_map<int, Client>& clients,
-    std::unordered_map<std::string, int>& client_ids) {
+    std::unordered_map<std::string, int>& client_ids,
+    std::unordered_map<std::string, std::unordered_set<std::string>>&
+        client_subscriptions) {
     std::string client_id = clients[clientfd].id;
     std::cout << "Client " << client_id << " disconnected." << std::endl;
+
+    // Save the client's subscriptions before removing from clients map
+    client_subscriptions[client_id] =
+        std::unordered_set<std::string>(clients[clientfd].subscriptions.begin(),
+                                        clients[clientfd].subscriptions.end());
 
     // Remove from client_ids map to allow reconnection with same ID
     client_ids.erase(client_id);
@@ -79,22 +88,78 @@ void handle_client_disconnect(
     close(clientfd);
 }
 
+// Convert a subscription pattern with wildcards to a regex pattern
+std::string subscription_to_regex(const std::string& subscription) {
+    std::string regex_pattern = "^";  // Start anchor
+
+    // Process the subscription character by character
+    for (size_t i = 0; i < subscription.length(); i++) {
+        char c = subscription[i];
+
+        if (c == '+') {
+            // '+' matches exactly one level (any characters except '/')
+            regex_pattern += "([^/]+)";
+        } else if (c == '*') {
+            // '*' matches zero or more levels (any characters including '/')
+            regex_pattern += "(.*)";
+        } else if (c == '/' || c == '.' || c == '^' || c == '$' || c == '|' ||
+                   c == '(' || c == ')' || c == '[' || c == ']' || c == '{' ||
+                   c == '}' || c == '\\' || c == '?' || c == '+') {
+            // Escape regex special characters
+            regex_pattern += '\\';
+            regex_pattern += c;
+        } else {
+            // Regular character
+            regex_pattern += c;
+        }
+    }
+
+    regex_pattern += "$";  // End anchor
+    return regex_pattern;
+}
+
+// Cache for compiled regex patterns to avoid recompiling the same pattern
+std::unordered_map<std::string, std::regex> regex_cache;
+
+// Check if a topic matches a subscription pattern with wildcards
+bool topic_matches(const std::string& subscription, const std::string& topic) {
+    // Get or create the regex for this subscription
+    std::regex pattern;
+
+    auto it = regex_cache.find(subscription);
+    if (it != regex_cache.end()) {
+        pattern = it->second;
+    } else {
+        std::string regex_pattern = subscription_to_regex(subscription);
+        pattern = std::regex(regex_pattern);
+        regex_cache[subscription] = pattern;
+    }
+
+    // Match the topic against the pattern
+    return std::regex_match(topic, pattern);
+}
+
 void handle_udp_forwarding(std::unordered_map<int, Client>& clients,
                            std::unordered_map<std::string, int>& client_ids,
                            const std::string& topic,
                            uint8_t data_type,
-                           int content_len,
+                           const std::vector<char>& content,
                            uint32_t sender_ip,
-                           uint16_t sender_port,
-                           const std::vector<char>& content) {
+                           uint16_t sender_port) {
     for (const auto& client_pair : clients) {
         int clientfd = client_pair.first;
         const Client& client = client_pair.second;
 
-        // Check if the client is subscribed to the topic
-        if (client.subscriptions.find(topic) != client.subscriptions.end()) {
+        bool should_receive = false;
+        for (const auto& subscription : client.subscriptions) {
+            if (topic_matches(subscription, topic)) {
+                should_receive = true;
+                break;
+            }
+        }
+
+        if (should_receive) {
             MsgUDPForward msg_udp_forward;
-            // Compute total message length (struct + topic + content)
             uint32_t struct_size = sizeof(msg_udp_forward);
             uint32_t topic_size = topic.size();
             uint32_t content_size = content.size();
@@ -107,19 +172,16 @@ void handle_udp_forwarding(std::unordered_map<int, Client>& clients,
             msg_udp_forward.data_type = data_type;
             msg_udp_forward.content_len = htons(content_size);
 
-            // Build a single send buffer
             std::vector<char> send_buf;
             send_buf.resize(struct_size + topic_size + content_size);
 
-            // Copy struct, topic and content into the buffer
             memcpy(send_buf.data(), &msg_udp_forward, struct_size);
-            memcpy(send_buf.data() + struct_size, topic.data(), topic_size);
+            memcpy(send_buf.data() + struct_size, topic.c_str(), topic_size);
             if (content_size > 0) {
                 memcpy(send_buf.data() + struct_size + topic_size,
                        content.data(), content_size);
             }
 
-            // Send it in one call
             send_all(clientfd, send_buf.data(), send_buf.size());
         }
     }
@@ -145,6 +207,8 @@ int main(int argc, char* argv[]) {
     std::unordered_map<int, Client> clients;  // clients by socket fd
     std::unordered_map<std::string, int>
         client_ids;  // map client ID to socket fd
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        client_subscriptions;  // map client ID to subscriptions
 
     while (true) {
         int poll_result = poll(pfds.data(), pfds.size(), -1);
@@ -188,6 +252,15 @@ int main(int argc, char* argv[]) {
             Client client;
             client.id = client_id_str;
             client.subscriptions.clear();
+
+            // Restore subscriptions if this client has connected before
+            if (client_subscriptions.find(client_id_str) !=
+                client_subscriptions.end()) {
+                for (const auto& topic : client_subscriptions[client_id_str]) {
+                    client.subscriptions.insert(topic);
+                }
+            }
+
             clients[client_sockfd] = client;
 
             // Map the client ID to its socket fd
@@ -203,7 +276,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (pfds[2].revents & POLLIN) {
-            char buffer[1552];
+            char buffer[1552];  // 50 (topic) + 1 (data_type) + 1500 (max
+                                // content) + 1 (null terminator)
             struct sockaddr_in udp_client_addr;
             socklen_t addr_len = sizeof(udp_client_addr);
             ssize_t bytes_received =
@@ -211,24 +285,28 @@ int main(int argc, char* argv[]) {
                          (struct sockaddr*)&udp_client_addr, &addr_len);
             DIE(bytes_received < 0, "recvfrom failed");
 
-            uint8_t data_type = static_cast<uint8_t>(buffer[50]);
+            // Extract topic (first 50 bytes, null-terminated)
             size_t actual_topic_len = strnlen(buffer, 50);
             std::string topic(buffer, actual_topic_len);
 
-            int content_len = bytes_received - 51;
+            // Extract data type (1 byte after topic)
+            uint8_t data_type = static_cast<uint8_t>(buffer[50]);
+
+            // Extract content (remaining bytes)
+            int content_len =
+                bytes_received - 51;  // 50 (topic) + 1 (data_type)
             std::vector<char> content(buffer + 51, buffer + 51 + content_len);
 
-            std::string type_str, value_str;
-            format_udp_content(data_type, content, type_str, value_str);
-
+            // Forward the UDP message to subscribed clients
             handle_udp_forwarding(clients, client_ids, topic, data_type,
-                                  content_len, udp_client_addr.sin_addr.s_addr,
-                                  udp_client_addr.sin_port, content);
+                                  content, udp_client_addr.sin_addr.s_addr,
+                                  udp_client_addr.sin_port);
         }
 
         for (size_t i = 3; i < pfds.size(); i++) {
             if (pfds[i].revents & (POLLERR | POLLHUP)) {
-                handle_client_disconnect(pfds[i].fd, clients, client_ids);
+                handle_client_disconnect(pfds[i].fd, clients, client_ids,
+                                         client_subscriptions);
                 pfds[i].fd = -1;  // Mark the fd as closed
                 continue;
             }
@@ -240,7 +318,8 @@ int main(int argc, char* argv[]) {
                                                sizeof(msg_subscription));
 
                 if (recv_result <= 0) {
-                    handle_client_disconnect(clientfd, clients, client_ids);
+                    handle_client_disconnect(clientfd, clients, client_ids,
+                                             client_subscriptions);
                     pfds[i].fd = -1;  // Mark the fd as closed
                     continue;
                 }
@@ -251,7 +330,8 @@ int main(int argc, char* argv[]) {
 
                 if (recv_all(clientfd, topic_buffer.data(), topic_len_host) <=
                     0) {
-                    handle_client_disconnect(clientfd, clients, client_ids);
+                    handle_client_disconnect(clientfd, clients, client_ids,
+                                             client_subscriptions);
                     pfds[i].fd = -1;  // Mark the fd as closed
                     continue;
                 }
@@ -260,15 +340,21 @@ int main(int argc, char* argv[]) {
 
                 if (msg_subscription.header.type == MSG_TYPE_SUBSCRIBE) {
                     clients[clientfd].subscriptions.insert(topic_str);
+                    // Also update the persistent subscriptions map
+                    client_subscriptions[clients[clientfd].id].insert(
+                        topic_str);
 
                 } else if (msg_subscription.header.type ==
                            MSG_TYPE_UNSUBSCRIBE) {
                     clients[clientfd].subscriptions.erase(topic_str);
+                    // Also update the persistent subscriptions map
+                    client_subscriptions[clients[clientfd].id].erase(topic_str);
 
                 } else {
                     std::cerr << "Received unexpected message type from client "
                               << clients[clientfd].id << std::endl;
-                    handle_client_disconnect(clientfd, clients, client_ids);
+                    handle_client_disconnect(clientfd, clients, client_ids,
+                                             client_subscriptions);
                     pfds[i].fd = -1;
                     continue;
                 }
