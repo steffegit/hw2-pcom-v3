@@ -410,9 +410,7 @@ def run_test_c1_subscribe_all(server, c1, topics):
   failed = False
   for topic in topics:
     c1.send_input("subscribe " + topic.name)
-    # print("debug: Subscribing to topic " + topic.name)
     outc1 = c1.get_output_timeout(1)
-    print("debug: Subscribed to topic " + topic.name)
     if not outc1.startswith("Subscribed to topic"):
       print("Error: C1 not subscribed to all topics")
       failed = True

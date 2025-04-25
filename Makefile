@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Wall -Werror -Wno-error=unused-variable -g -Iinclude
+CFLAGS = -Wall -Werror -Wno-error=unused-variable -g -Iinclude -std=c++17 -O2
 
 all: server subscriber
 

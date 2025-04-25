@@ -178,7 +178,7 @@ int main(int argc, char* argv[]) {
 
             // Check if it's a duplicate client ID (already connected)
             if (client_ids.find(client_id_str) != client_ids.end()) {
-                std::cerr << "Client " << client_id_str << " already connected."
+                std::cout << "Client " << client_id_str << " already connected."
                           << std::endl;
                 close(client_sockfd);
                 continue;

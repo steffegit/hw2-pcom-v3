@@ -183,6 +183,7 @@ int main(int argc, char* argv[]) {
                 close(sockfd_tcp);
                 break;
             }
+
             if (fds[1].revents & POLLIN) {
                 handle_tcp(sockfd_tcp);
             }
