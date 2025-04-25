@@ -213,6 +213,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    for (const auto& client_pair : clients) {
+        std::cout << "Closing connection to client " << client_pair.second.id
+                  << std::endl;
+        close(client_pair.first);
+    }
+    clients.clear();
+    client_ids.clear();
+
     for (size_t i = 1; i < pfds.size(); ++i) {
         close(pfds[i].fd);
     }

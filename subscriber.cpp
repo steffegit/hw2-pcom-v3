@@ -4,16 +4,21 @@
 #include <string.h>
 #include <unistd.h>
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include "include/common.h"
 #include "include/tcp_protocol.h"
 #include "include/utils.h"
 
 void handle_stdin(int sockfd_tcp) {
+    std::string line;
+    std::getline(std::cin, line);
+
     std::string command;
     std::string topic;
 
-    std::cin >> command >> topic;
+    std::istringstream iss(line);
+    iss >> command;
 
     if (command == "exit") {
         close(sockfd_tcp);
@@ -22,6 +27,12 @@ void handle_stdin(int sockfd_tcp) {
     }
 
     if (command == "subscribe" || command == "unsubscribe") {
+        iss >> topic;
+        if (topic.empty()) {
+            std::cerr << "Topic is required for subscribe/unsubscribe command"
+                      << std::endl;
+            return;
+        }
         // command and topic already read: topic may already be in variable
         // Prepare subscription or unsubscription message
         MsgSubscription msg;
