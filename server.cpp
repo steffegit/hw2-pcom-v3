@@ -13,8 +13,6 @@
 #include "include/tcp_protocol.h"
 #include "include/utils.h"
 
-#define MAX_CONNECTIONS 32
-
 void initialize_server(int port, int& listenfd_tcp, int& sockfd_udp) {
     listenfd_tcp = socket(AF_INET, SOCK_STREAM, 0);
     DIE(listenfd_tcp < 0, "socket creation failed for TCP");
@@ -60,7 +58,7 @@ void initialize_server(int port, int& listenfd_tcp, int& sockfd_udp) {
             0,
         "bind failed");
 
-    DIE(listen(listenfd_tcp, MAX_CONNECTIONS) < 0, "listen failed");
+    DIE(listen(listenfd_tcp, SOMAXCONN) < 0, "listen failed");
 }
 
 bool handle_stdin_command() {
@@ -74,6 +72,21 @@ bool handle_stdin_command() {
         }
     }
     return false;
+}
+
+void handle_client_disconnect(
+    int clientfd,
+    std::unordered_map<int, Client>& clients,
+    std::unordered_map<std::string, int>& client_ids) {
+    std::string client_id = clients[clientfd].id;
+    std::cout << "Client " << client_id << " disconnected." << std::endl;
+
+    // Remove from client_ids map to allow reconnection with same ID
+    client_ids.erase(client_id);
+
+    // Remove from clients map
+    clients.erase(clientfd);
+    close(clientfd);
 }
 
 int main(int argc, char* argv[]) {
@@ -93,7 +106,9 @@ int main(int argc, char* argv[]) {
     pfds.push_back({.fd = listenfd_tcp, .events = POLLIN, .revents = 0});
     pfds.push_back({.fd = sockfd_udp, .events = POLLIN, .revents = 0});
 
-    std::unordered_map<int, Client> clients;
+    std::unordered_map<int, Client> clients;  // clients by socket fd
+    std::unordered_map<std::string, int>
+        client_ids;  // map client ID to socket fd
 
     while (true) {
         int poll_result = poll(pfds.data(), pfds.size(), -1);
@@ -119,24 +134,28 @@ int main(int argc, char* argv[]) {
 
             // Check if the client ID is present
             MsgClientID msg_client_id;
-            int recv_status =
-                recv_all(client_sockfd, &msg_client_id, sizeof(msg_client_id));
-            if (recv_status < 0) {
-                std::cerr << "Failed to receive client ID" << std::endl;
+            DIE(recv_all(client_sockfd, &msg_client_id, sizeof(msg_client_id)) <
+                    0,
+                "recv_all MSG_CLIENT_ID failed");
+
+            std::string client_id_str = std::string(msg_client_id.id);
+
+            // Check if it's a duplicate client ID (already connected)
+            if (client_ids.find(client_id_str) != client_ids.end()) {
+                std::cerr << "Client " << client_id_str << " already connected."
+                          << std::endl;
                 close(client_sockfd);
                 continue;
             }
 
             // Store the client ID
             Client client;
-            client.id = std::string(msg_client_id.id);
+            client.id = client_id_str;
             client.subscriptions.clear();
             clients[client_sockfd] = client;
 
-            // Disable Nagle's algorithm for the client socket
-            result = setsockopt(client_sockfd, IPPROTO_TCP, TCP_NODELAY,
-                                (char*)&enable, sizeof(int));
-            DIE(result < 0, "setsockopt TCP_NODELAY failed");
+            // Map the client ID to its socket fd
+            client_ids[client_id_str] = client_sockfd;
 
             // Add the client socket to the poll list
             pfds.push_back(
@@ -146,6 +165,56 @@ int main(int argc, char* argv[]) {
                       << inet_ntoa(client_addr.sin_addr) << ":"
                       << ntohs(client_addr.sin_port) << "." << std::endl;
         }
+
+        for (size_t i = 3; i < pfds.size(); i++) {
+            if (pfds[i].revents & (POLLERR | POLLHUP)) {
+                handle_client_disconnect(pfds[i].fd, clients, client_ids);
+                pfds[i].fd = -1;  // Mark the fd as closed
+                continue;
+            }
+
+            if (pfds[i].revents & POLLIN) {  // Incoming data from client
+                int clientfd = pfds[i].fd;
+                MsgSubscription msg_subscription;
+                ssize_t recv_result = recv_all(clientfd, &msg_subscription,
+                                               sizeof(msg_subscription));
+
+                if (recv_result <= 0) {
+                    // Client disconnected or error occurred
+                    handle_client_disconnect(clientfd, clients, client_ids);
+                    pfds[i].fd = -1;  // Mark the fd as closed
+                    continue;
+                }
+
+                char* topic = new char[msg_subscription.topic_len + 1];
+                if (recv_all(clientfd, topic, msg_subscription.topic_len) <=
+                    0) {
+                    // Error receiving topic
+                    delete[] topic;
+                    handle_client_disconnect(clientfd, clients, client_ids);
+                    pfds[i].fd = -1;  // Mark the fd as closed
+                    continue;
+                }
+
+                topic[msg_subscription.topic_len] = '\0';
+
+                // Store the subscription
+                clients[clientfd].subscriptions.insert(topic);
+
+                delete[] topic;
+            }
+        }
+
+        // Clean up closed file descriptors from the poll array
+        for (size_t i = pfds.size() - 1; i > 2; --i) {
+            if (pfds[i].fd < 0) {
+                pfds.erase(pfds.begin() + i);
+            }
+        }
+    }
+
+    for (size_t i = 1; i < pfds.size(); ++i) {
+        close(pfds[i].fd);
     }
 
     return 0;
