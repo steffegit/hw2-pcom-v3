@@ -57,7 +57,56 @@ void handle_stdin(int sockfd_tcp) {
     }
 }
 
-void handle_tcp(int sockfd_tcp) {}
+void handle_tcp(int sockfd_tcp) {
+    MsgUDPForward msg_udp_forward;
+    ssize_t recv_result =
+        recv_all(sockfd_tcp, &msg_udp_forward, sizeof(msg_udp_forward));
+    if (recv_result <= 0) {
+        // Server disconnected or error occurred
+        std::cerr << "Server disconnected." << std::endl;
+        close(sockfd_tcp);
+        exit(EXIT_FAILURE);
+    }
+
+    // Get topic
+    uint16_t topic_len = ntohs(msg_udp_forward.topic_len);
+    char* topic = new char[topic_len + 1];
+    recv_result = recv_all(sockfd_tcp, topic, topic_len);
+    if (recv_result <= 0) {
+        delete[] topic;
+        std::cerr << "Error receiving topic from server." << std::endl;
+        return;
+    }
+    topic[topic_len] = '\0';
+
+    // Get content
+    uint16_t content_len = ntohs(msg_udp_forward.content_len);
+    std::vector<char> content(content_len);
+    if (content_len > 0) {
+        recv_result = recv_all(sockfd_tcp, content.data(), content_len);
+        if (recv_result <= 0) {
+            delete[] topic;
+            std::cerr << "Error receiving content from server." << std::endl;
+            return;
+        }
+    }
+
+    // Process UDP message
+    std::string type_str;
+    std::string value_str;
+    bool format_success = format_udp_content(msg_udp_forward.data_type, content,
+                                             type_str, value_str);
+
+    if (format_success) {
+        std::cout << inet_ntoa(*(struct in_addr*)&msg_udp_forward.sender_ip)
+                  << ":" << ntohs(msg_udp_forward.sender_port) << " - " << topic
+                  << " - " << type_str << " - " << value_str << std::endl;
+    } else {
+        std::cerr << "Failed to format UDP message" << std::endl;
+    }
+
+    delete[] topic;
+}
 
 int main(int argc, char* argv[]) {
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
@@ -118,19 +167,27 @@ int main(int argc, char* argv[]) {
 
     // TCP socket
     fds[1].fd = sockfd_tcp;
-    fds[1].events = POLLIN;
+    fds[1].events = POLLIN | POLLERR | POLLHUP;
     fds[1].revents = 0;
 
     while (true) {
         DIE(poll(fds, 2, -1) < 0, "poll failed");
+
         if (fds[0].revents & POLLIN) {
             handle_stdin(sockfd_tcp);
         }
-        if (fds[1].revents & POLLIN) {
-            handle_tcp(sockfd_tcp);
+
+        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
+            if (fds[1].revents & (POLLERR | POLLHUP)) {
+                std::cerr << "Server disconnected." << std::endl;
+                close(sockfd_tcp);
+                break;
+            }
+            if (fds[1].revents & POLLIN) {
+                handle_tcp(sockfd_tcp);
+            }
         }
     }
     close(sockfd_tcp);
-    close(STDIN_FILENO);
     return 0;
 }

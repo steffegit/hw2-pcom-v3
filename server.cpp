@@ -20,24 +20,14 @@ void initialize_server(int port, int& listenfd_tcp, int& sockfd_udp) {
     sockfd_udp = socket(AF_INET, SOCK_DGRAM, 0);
     DIE(sockfd_udp < 0, "socket creation failed for UDP");
 
-    // Reuse address & port for TCP socket
     int enable = 1;
     DIE(setsockopt(listenfd_tcp, SOL_SOCKET, SO_REUSEADDR, &enable,
                    sizeof(enable)) < 0,
         "setsockopt(SO_REUSEADDR) failed");
 
-    DIE(setsockopt(listenfd_tcp, SOL_SOCKET, SO_REUSEPORT, &enable,
-                   sizeof(enable)) < 0,
-        "setsockopt(SO_REUSEPORT) failed");
-
-    // Reuse address & port for UDP socket
     DIE(setsockopt(sockfd_udp, SOL_SOCKET, SO_REUSEADDR, &enable,
                    sizeof(enable)) < 0,
         "setsockopt(SO_REUSEADDR) failed");
-
-    DIE(setsockopt(sockfd_udp, SOL_SOCKET, SO_REUSEPORT, &enable,
-                   sizeof(enable)) < 0,
-        "setsockopt(SO_REUSEPORT) failed");
 
     // Disable Nagle's algorithm for TCP socket
     DIE(setsockopt(listenfd_tcp, IPPROTO_TCP, TCP_NODELAY, (char*)&enable,
@@ -87,6 +77,52 @@ void handle_client_disconnect(
     // Remove from clients map
     clients.erase(clientfd);
     close(clientfd);
+}
+
+void handle_udp_forwarding(std::unordered_map<int, Client>& clients,
+                           std::unordered_map<std::string, int>& client_ids,
+                           const std::string& topic,
+                           uint8_t data_type,
+                           int content_len,
+                           uint32_t sender_ip,
+                           uint16_t sender_port,
+                           const std::vector<char>& content) {
+    for (const auto& client_pair : clients) {
+        int clientfd = client_pair.first;
+        const Client& client = client_pair.second;
+
+        // Check if the client is subscribed to the topic
+        if (client.subscriptions.find(topic) != client.subscriptions.end()) {
+            MsgUDPForward msg_udp_forward;
+            // Compute total message length (struct + topic + content)
+            uint32_t struct_size = sizeof(msg_udp_forward);
+            uint32_t topic_size = topic.size();
+            uint32_t content_size = content.size();
+            msg_udp_forward.header.len =
+                htonl(struct_size + topic_size + content_size);
+            msg_udp_forward.header.type = MSG_TYPE_FORWARD_UDP;
+            msg_udp_forward.sender_ip = sender_ip;
+            msg_udp_forward.sender_port = sender_port;
+            msg_udp_forward.topic_len = htons(topic_size);
+            msg_udp_forward.data_type = data_type;
+            msg_udp_forward.content_len = htons(content_size);
+
+            // Build a single send buffer
+            std::vector<char> send_buf;
+            send_buf.resize(struct_size + topic_size + content_size);
+
+            // Copy struct, topic and content into the buffer
+            memcpy(send_buf.data(), &msg_udp_forward, struct_size);
+            memcpy(send_buf.data() + struct_size, topic.data(), topic_size);
+            if (content_size > 0) {
+                memcpy(send_buf.data() + struct_size + topic_size,
+                       content.data(), content_size);
+            }
+
+            // Send it in one call
+            send_all(clientfd, send_buf.data(), send_buf.size());
+        }
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -166,6 +202,30 @@ int main(int argc, char* argv[]) {
                       << ntohs(client_addr.sin_port) << "." << std::endl;
         }
 
+        if (pfds[2].revents & POLLIN) {
+            char buffer[1552];
+            struct sockaddr_in udp_client_addr;
+            socklen_t addr_len = sizeof(udp_client_addr);
+            ssize_t bytes_received =
+                recvfrom(sockfd_udp, buffer, sizeof(buffer), 0,
+                         (struct sockaddr*)&udp_client_addr, &addr_len);
+            DIE(bytes_received < 0, "recvfrom failed");
+
+            uint8_t data_type = static_cast<uint8_t>(buffer[50]);
+            size_t actual_topic_len = strnlen(buffer, 50);
+            std::string topic(buffer, actual_topic_len);
+
+            int content_len = bytes_received - 51;
+            std::vector<char> content(buffer + 51, buffer + 51 + content_len);
+
+            std::string type_str, value_str;
+            format_udp_content(data_type, content, type_str, value_str);
+
+            handle_udp_forwarding(clients, client_ids, topic, data_type,
+                                  content_len, udp_client_addr.sin_addr.s_addr,
+                                  udp_client_addr.sin_port, content);
+        }
+
         for (size_t i = 3; i < pfds.size(); i++) {
             if (pfds[i].revents & (POLLERR | POLLHUP)) {
                 handle_client_disconnect(pfds[i].fd, clients, client_ids);
@@ -180,28 +240,38 @@ int main(int argc, char* argv[]) {
                                                sizeof(msg_subscription));
 
                 if (recv_result <= 0) {
-                    // Client disconnected or error occurred
                     handle_client_disconnect(clientfd, clients, client_ids);
                     pfds[i].fd = -1;  // Mark the fd as closed
                     continue;
                 }
 
-                char* topic = new char[msg_subscription.topic_len + 1];
-                if (recv_all(clientfd, topic, msg_subscription.topic_len) <=
+                uint16_t topic_len_host = ntohs(msg_subscription.topic_len);
+
+                std::vector<char> topic_buffer(topic_len_host);
+
+                if (recv_all(clientfd, topic_buffer.data(), topic_len_host) <=
                     0) {
-                    // Error receiving topic
-                    delete[] topic;
                     handle_client_disconnect(clientfd, clients, client_ids);
                     pfds[i].fd = -1;  // Mark the fd as closed
                     continue;
                 }
 
-                topic[msg_subscription.topic_len] = '\0';
+                std::string topic_str(topic_buffer.begin(), topic_buffer.end());
 
-                // Store the subscription
-                clients[clientfd].subscriptions.insert(topic);
+                if (msg_subscription.header.type == MSG_TYPE_SUBSCRIBE) {
+                    clients[clientfd].subscriptions.insert(topic_str);
 
-                delete[] topic;
+                } else if (msg_subscription.header.type ==
+                           MSG_TYPE_UNSUBSCRIBE) {
+                    clients[clientfd].subscriptions.erase(topic_str);
+
+                } else {
+                    std::cerr << "Received unexpected message type from client "
+                              << clients[clientfd].id << std::endl;
+                    handle_client_disconnect(clientfd, clients, client_ids);
+                    pfds[i].fd = -1;
+                    continue;
+                }
             }
         }
 
