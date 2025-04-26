@@ -19,7 +19,7 @@ struct TcpHeader {
 // Client ID message
 struct MsgClientID {
     TcpHeader header;  // type = MSG_TYPE_CLIENT_ID
-    char id[10];  // Fixed size client ID (max 10 chars as per requirements)
+    char id[11];  // Fixed size client ID (max 10 chars as per requirements)
 };
 
 // Subscribe/Unsubscribe message

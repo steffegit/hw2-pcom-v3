@@ -18,8 +18,8 @@ bool format_udp_content(
                           << content_len << " bytes).\n";
                 return false;
             }
-            // Read the sign (first byte)
-            char sign_char = content_ptr[0];  // Read the sign byte
+            // First byte is the sign
+            char sign_char = content_ptr[0];
             uint8_t sign = (sign_char == 1) ? 1 : 0;
 
             // Read the absolute value (4 bytes, index 1-4)
@@ -44,7 +44,6 @@ bool format_udp_content(
             uint16_t num_host = ntohs(num_net);
             double val = static_cast<double>(num_host) / 100.0;
 
-            // Format the value as a string with 2 decimal places
             char float_buf[40];
             snprintf(float_buf, sizeof(float_buf), "%.2f", val);
             out_value_str = float_buf;
@@ -67,7 +66,6 @@ bool format_udp_content(
             uint32_t num_abs_val_host = ntohl(num_abs_val_net);
 
             // Reading the negative power of 10 (byte 6, index 5)
-            // We need to convert char to uint8_t
             uint8_t power_neg = static_cast<uint8_t>(content_ptr[5]);
 
             double val = static_cast<double>(num_abs_val_host);
@@ -77,13 +75,13 @@ bool format_udp_content(
             if (sign == 1) {
                 val = -val;
             }
-            out_value_str = std::to_string(
-                val);  // Convert the double to string (default precision)
+            char float_buf[40];
+            snprintf(float_buf, sizeof(float_buf), "%.2f", val);
+            out_value_str = float_buf;
             return true;
         }
         case 3: {  // STRING
             out_type_str = "STRING";
-            // Copy the content (char vector) directly into string
             out_value_str.assign(content.begin(), content.end());
             return true;
         }
