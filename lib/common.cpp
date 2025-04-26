@@ -18,7 +18,7 @@ bool format_udp_content(
                           << content_len << " bytes).\n";
                 return false;
             }
-            // First byte is the sign
+            // Read the sign (first byte)
             char sign_char = content_ptr[0];
             uint8_t sign = (sign_char == 1) ? 1 : 0;
 
@@ -44,6 +44,7 @@ bool format_udp_content(
             uint16_t num_host = ntohs(num_net);
             double val = static_cast<double>(num_host) / 100.0;
 
+            // We only need 2 decimal places
             char float_buf[40];
             snprintf(float_buf, sizeof(float_buf), "%.2f", val);
             out_value_str = float_buf;
@@ -75,9 +76,7 @@ bool format_udp_content(
             if (sign == 1) {
                 val = -val;
             }
-            char float_buf[40];
-            snprintf(float_buf, sizeof(float_buf), "%.2f", val);
-            out_value_str = float_buf;
+            out_value_str = std::to_string(val);
             return true;
         }
         case 3: {  // STRING
@@ -85,7 +84,7 @@ bool format_udp_content(
             out_value_str.assign(content.begin(), content.end());
             return true;
         }
-        default:  // Unknown data type
+        default:
             out_type_str = "INVALID_TYPE";
             out_value_str = "Unknown Data Type";
             std::cerr << "Error: Invalid UDP data type encountered: "

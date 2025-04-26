@@ -62,36 +62,34 @@ void handle_tcp(int sockfd_tcp) {
     ssize_t recv_result =
         recv_all(sockfd_tcp, &msg_udp_forward, sizeof(msg_udp_forward));
     if (recv_result <= 0) {
-        // Server disconnected or error occurred
         std::cerr << "Server disconnected." << std::endl;
         close(sockfd_tcp);
         exit(EXIT_FAILURE);
     }
 
-    // Get topic
     uint16_t topic_len = ntohs(msg_udp_forward.topic_len);
-    char* topic = new char[topic_len + 1];
-    recv_result = recv_all(sockfd_tcp, topic, topic_len);
+    std::vector<char> topic_buffer(topic_len + 1,
+                                   '\0');  // +1 for null terminator
+
+    recv_result = recv_all(sockfd_tcp, topic_buffer.data(), topic_len);
     if (recv_result <= 0) {
-        delete[] topic;
         std::cerr << "Error receiving topic from server." << std::endl;
         return;
     }
-    topic[topic_len] = '\0';
 
-    // Get content
+    topic_buffer[topic_len] = '\0';
+    std::string topic_str(topic_buffer.data());
+
     uint16_t content_len = ntohs(msg_udp_forward.content_len);
     std::vector<char> content(content_len);
     if (content_len > 0) {
         recv_result = recv_all(sockfd_tcp, content.data(), content_len);
         if (recv_result <= 0) {
-            delete[] topic;
             std::cerr << "Error receiving content from server." << std::endl;
             return;
         }
     }
 
-    // Process UDP message
     std::string type_str;
     std::string value_str;
     bool format_success = format_udp_content(msg_udp_forward.data_type, content,
@@ -99,13 +97,12 @@ void handle_tcp(int sockfd_tcp) {
 
     if (format_success) {
         std::cout << inet_ntoa(*(struct in_addr*)&msg_udp_forward.sender_ip)
-                  << ":" << ntohs(msg_udp_forward.sender_port) << " - " << topic
-                  << " - " << type_str << " - " << value_str << std::endl;
+                  << ":" << ntohs(msg_udp_forward.sender_port) << " - "
+                  << topic_str << " - " << type_str << " - " << value_str
+                  << std::endl;
     } else {
         std::cerr << "Failed to format UDP message" << std::endl;
     }
-
-    delete[] topic;
 }
 
 int main(int argc, char* argv[]) {
