@@ -118,12 +118,10 @@ std::string subscription_to_regex(const std::string& subscription) {
     return regex_pattern;
 }
 
-// Cache for compiled regex patterns to avoid recompiling the same pattern
-std::unordered_map<std::string, std::regex> regex_cache;
-
 // Check if a topic matches a subscription pattern with wildcards
-bool topic_matches(const std::string& subscription, const std::string& topic) {
-    // Get or create the regex for this subscription
+bool topic_matches(const std::string& subscription,
+                   const std::string& topic,
+                   std::unordered_map<std::string, std::regex>& regex_cache) {
     std::regex pattern;
 
     auto it = regex_cache.find(subscription);
@@ -135,24 +133,25 @@ bool topic_matches(const std::string& subscription, const std::string& topic) {
         regex_cache[subscription] = pattern;
     }
 
-    // Match the topic against the pattern
     return std::regex_match(topic, pattern);
 }
 
-void handle_udp_forwarding(std::unordered_map<int, Client>& clients,
-                           std::unordered_map<std::string, int>& client_ids,
-                           const std::string& topic,
-                           uint8_t data_type,
-                           const std::vector<char>& content,
-                           uint32_t sender_ip,
-                           uint16_t sender_port) {
+void handle_udp_forwarding(
+    std::unordered_map<int, Client>& clients,
+    std::unordered_map<std::string, int>& client_ids,
+    const std::string& topic,
+    uint8_t data_type,
+    const std::vector<char>& content,
+    uint32_t sender_ip,
+    uint16_t sender_port,
+    std::unordered_map<std::string, std::regex>& regex_cache) {
     for (const auto& client_pair : clients) {
         int clientfd = client_pair.first;
         const Client& client = client_pair.second;
 
         bool should_receive = false;
         for (const auto& subscription : client.subscriptions) {
-            if (topic_matches(subscription, topic)) {
+            if (topic_matches(subscription, topic, regex_cache)) {
                 should_receive = true;
                 break;
             }
@@ -209,6 +208,8 @@ int main(int argc, char* argv[]) {
         client_ids;  // map client ID to socket fd
     std::unordered_map<std::string, std::unordered_set<std::string>>
         client_subscriptions;  // map client ID to subscriptions
+
+    std::unordered_map<std::string, std::regex> regex_cache;
 
     while (true) {
         int poll_result = poll(pfds.data(), pfds.size(), -1);
@@ -300,7 +301,7 @@ int main(int argc, char* argv[]) {
             // Forward the UDP message to subscribed clients
             handle_udp_forwarding(clients, client_ids, topic, data_type,
                                   content, udp_client_addr.sin_addr.s_addr,
-                                  udp_client_addr.sin_port);
+                                  udp_client_addr.sin_port, regex_cache);
         }
 
         for (size_t i = 3; i < pfds.size(); i++) {
