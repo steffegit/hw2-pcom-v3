@@ -1,12 +1,12 @@
 CC = g++
-CFLAGS = -Wall -Werror -Wno-error=unused-variable -g -Iinclude -std=c++17 -O2
+CFLAGS = -Wall -Werror -Wno-error=unused-variable -g -Iinclude -std=c++17
 
 all: server subscriber
 
-server: server.cpp lib/tcp_protocol.cpp lib/common.cpp
+server: server.cpp tcp_protocol.cpp common.cpp
 	$(CC) $(CFLAGS) -o $@ $^
 
-subscriber: subscriber.cpp lib/tcp_protocol.cpp lib/common.cpp
+subscriber: subscriber.cpp tcp_protocol.cpp common.cpp
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

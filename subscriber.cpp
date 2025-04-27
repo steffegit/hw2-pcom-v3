@@ -6,9 +6,9 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include "include/common.h"
-#include "include/tcp_protocol.h"
-#include "include/utils.h"
+#include "common.h"
+#include "tcp_protocol.h"
+#include "utils.h"
 
 void handle_stdin(int sockfd_tcp) {
     std::string line;

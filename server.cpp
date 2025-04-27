@@ -11,9 +11,9 @@
 #include <unordered_set>
 #include <vector>
 #include "client.h"
-#include "include/common.h"
-#include "include/tcp_protocol.h"
-#include "include/utils.h"
+#include "common.h"
+#include "tcp_protocol.h"
+#include "utils.h"
 
 void initialize_server(int port, int& listenfd_tcp, int& sockfd_udp) {
     listenfd_tcp = socket(AF_INET, SOCK_STREAM, 0);
