@@ -14,8 +14,8 @@ bool format_udp_content(
         case 0: {  // INT
             out_type_str = "INT";
             if (content_len < 5) {  // 1 sign + 4 uint32_t
-                std::cerr << "Warning: UDP INT content too short ("
-                          << content_len << " bytes).\n";
+                // std::cerr << "Warning: UDP INT content too short ("
+                //           << content_len << " bytes).\n";
                 return false;
             }
             // Read the sign (first byte)
@@ -35,8 +35,8 @@ bool format_udp_content(
         case 1: {  // SHORT_REAL
             out_type_str = "SHORT_REAL";
             if (content_len < 2) {  // 2 bytes for uint16_t
-                std::cerr << "Warning: UDP SHORT_REAL content too short ("
-                          << content_len << " bytes).\n";
+                // std::cerr << "Warning: UDP SHORT_REAL content too short ("
+                //           << content_len << " bytes).\n";
                 return false;
             }
             uint16_t num_net;
@@ -53,8 +53,8 @@ bool format_udp_content(
         case 2: {  // FLOAT
             out_type_str = "FLOAT";
             if (content_len < 6) {  // 1 sign + 4 bytes for uint32_t + 1 power
-                std::cerr << "Warning: UDP FLOAT content too short ("
-                          << content_len << " bytes).\n";
+                // std::cerr << "Warning: UDP FLOAT content too short ("
+                //           << content_len << " bytes).\n";
                 return false;
             }
             // Reading the sign (1st byte, index 0)
@@ -87,8 +87,8 @@ bool format_udp_content(
         default:
             out_type_str = "INVALID_TYPE";
             out_value_str = "Unknown Data Type";
-            std::cerr << "Error: Invalid UDP data type encountered: "
-                      << static_cast<int>(data_type) << "\n";
+            // std::cerr << "Error: Invalid UDP data type encountered: "
+            //           << static_cast<int>(data_type) << "\n";
             return false;
     }
 }

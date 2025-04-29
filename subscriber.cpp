@@ -29,8 +29,9 @@ void handle_stdin(int sockfd_tcp) {
     if (command == "subscribe" || command == "unsubscribe") {
         iss >> topic;
         if (topic.empty()) {
-            std::cerr << "Topic is required for subscribe/unsubscribe command"
-                      << std::endl;
+            // std::cerr << "Topic is required for subscribe/unsubscribe
+            // command"
+            //           << std::endl;
             return;
         }
         // command and topic already read: topic may already be in variable
@@ -62,7 +63,7 @@ void handle_tcp(int sockfd_tcp) {
     ssize_t recv_result =
         recv_all(sockfd_tcp, &msg_udp_forward, sizeof(msg_udp_forward));
     if (recv_result <= 0) {
-        std::cerr << "Server disconnected." << std::endl;
+        // std::cerr << "Server disconnected." << std::endl;
         close(sockfd_tcp);
         exit(EXIT_FAILURE);
     }
@@ -73,7 +74,7 @@ void handle_tcp(int sockfd_tcp) {
 
     recv_result = recv_all(sockfd_tcp, topic_buffer.data(), topic_len);
     if (recv_result <= 0) {
-        std::cerr << "Error receiving topic from server." << std::endl;
+        // std::cerr << "Error receiving topic from server." << std::endl;
         return;
     }
 
@@ -85,7 +86,7 @@ void handle_tcp(int sockfd_tcp) {
     if (content_len > 0) {
         recv_result = recv_all(sockfd_tcp, content.data(), content_len);
         if (recv_result <= 0) {
-            std::cerr << "Error receiving content from server." << std::endl;
+            // std::cerr << "Error receiving content from server." << std::endl;
             return;
         }
     }
@@ -101,7 +102,7 @@ void handle_tcp(int sockfd_tcp) {
                   << topic_str << " - " << type_str << " - " << value_str
                   << std::endl;
     } else {
-        std::cerr << "Failed to format UDP message" << std::endl;
+        // std::cerr << "Failed to format UDP message" << std::endl;
     }
 }
 
@@ -109,15 +110,16 @@ int main(int argc, char* argv[]) {
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
     if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <client_id> <IP> <PORT>"
-                  << std::endl;
+        // std::cerr << "Usage: " << argv[0] << " <client_id> <IP> <PORT>"
+        //           << std::endl;
         exit(EXIT_FAILURE);
     }
 
     char* client_id = argv[1];
     int id_len = strlen(client_id);
     if (id_len > 10) {
-        std::cerr << "Client ID must be less than 10 characters" << std::endl;
+        // std::cerr << "Client ID must be less than 10 characters" <<
+        // std::endl;
         exit(EXIT_FAILURE);
     }
 
@@ -176,7 +178,7 @@ int main(int argc, char* argv[]) {
 
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             if (fds[1].revents & (POLLERR | POLLHUP)) {
-                std::cerr << "Server disconnected." << std::endl;
+                // std::cerr << "Server disconnected." << std::endl;
                 close(sockfd_tcp);
                 break;
             }

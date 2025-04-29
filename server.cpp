@@ -190,7 +190,7 @@ int main(int argc, char* argv[]) {
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
     if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <PORT>" << std::endl;
+        // std::cerr << "Usage: " << argv[0] << " <PORT>" << std::endl;
         exit(EXIT_FAILURE);
     }
     int PORT = atoi(argv[1]);
@@ -352,8 +352,9 @@ int main(int argc, char* argv[]) {
                     client_subscriptions[clients[clientfd].id].erase(topic_str);
 
                 } else {
-                    std::cerr << "Received unexpected message type from client "
-                              << clients[clientfd].id << std::endl;
+                    // std::cerr << "Received unexpected message type from
+                    // client "
+                    //           << clients[clientfd].id << std::endl;
                     handle_client_disconnect(clientfd, clients, client_ids,
                                              client_subscriptions);
                     pfds[i].fd = -1;
